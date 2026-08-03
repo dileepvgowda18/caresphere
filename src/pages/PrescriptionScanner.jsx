@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Fuse from 'fuse.js'
 import { createWorker } from 'tesseract.js'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import { medicineDatabase } from '../data/medicineDatabase'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
 
@@ -69,13 +71,26 @@ function normalizeOcrLine(line) {
     .replace(/\u00a0/g, ' ')
     .replace(/[•◦▪·]+/g, ' ')
     .replace(/[“”]/g, '"')
-    .replace(/[^\w\s/().:+-]/g, ' ')
+    .replace(/[+*:\-()\[\]{}|<>]/g, ' ')
+    .replace(/[^\w\s/.]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
+function normalizeOcrText(text) {
+  if (!text) {
+    return ''
+  }
+
+  return text
+    .split(/\r?\n/)
+    .map((line) => normalizeOcrLine(line))
+    .filter(Boolean)
+    .join('\n')
+}
+
 function getPrescriptionSection(text) {
-  const lines = text
+  const lines = normalizeOcrText(text)
     .split(/\r?\n/)
     .map((line) => normalizeOcrLine(line))
     .filter(Boolean)
@@ -93,10 +108,116 @@ function shouldStopLine(line) {
   return (
     /\bsignature\b/.test(normalized) ||
     /\bdoctor\b/.test(normalized) ||
+    /\bdr\.?\b/.test(normalized) ||
     /\brefill\b/.test(normalized) ||
-    /\blabel\b/.test(normalized) ||
-    /\bprn\b/.test(normalized)
+    /\bolabel\b/.test(normalized) ||
+    /\bprn\b/.test(normalized) ||
+    /\bmd\b/.test(normalized) ||
+    /\bhospital\b/.test(normalized) ||
+    /\bmedical centre\b/.test(normalized) ||
+    /\bmedical center\b/.test(normalized) ||
+    /\bclinic\b/.test(normalized) ||
+    /\baddress\b/.test(normalized) ||
+    /\bstreet\b/.test(normalized) ||
+    /\broad\b/.test(normalized) ||
+    /\bcity\b/.test(normalized) ||
+    /\bphone\b/.test(normalized) ||
+    /\bmobile\b/.test(normalized) ||
+    /\bemail\b/.test(normalized) ||
+    /\bwebsite\b/.test(normalized) ||
+    /\bdea\b/.test(normalized) ||
+    /\blic\b/.test(normalized) ||
+    /\bpatient\b/.test(normalized) ||
+    /\bname\b/.test(normalized) ||
+    /\bage\b/.test(normalized) ||
+    /\bdob\b/.test(normalized) ||
+    /\bgender\b/.test(normalized) ||
+    /\bsign\b/.test(normalized) ||
+    /\brx number\b/.test(normalized) ||
+    /\bprescription number\b/.test(normalized)
   )
+}
+
+function extractMedicineName(rawLine) {
+  const line = normalizeOcrLine(rawLine)
+  if (!line || line.length < 3) {
+    return ''
+  }
+
+  const lowerLine = line.toLowerCase()
+  if (
+    /^(date|dated|doctor|dr|patient|name|address|phone|mobile|contact|clinic|hospital|license|age|refill|sig|signature|rx|℞|qty|quantity|days|morning|afternoon|evening|night|before|after|with|without|label|take)$/i.test(lowerLine) ||
+    /^(name|address|date|age|phone|license|sig|signature)\b/i.test(line)
+  ) {
+    return ''
+  }
+
+  if (shouldStopLine(line)) {
+    return ''
+  }
+
+  const stopTokens = ['bid', 'bd', 'od', 'tid', 'qid', 'sos', 'prn', 'hs', 'mg', 'mcg', 'ml', 'g', 'tab', 'tabs', 'tablet', 'tablets', 'cap', 'caps', 'capsule', 'capsules']
+  const pieces = line.split(/\s+/)
+  const cleanedPieces = []
+
+  for (const piece of pieces) {
+    const normalizedPiece = piece.toLowerCase().trim()
+    if (!normalizedPiece) {
+      continue
+    }
+
+    const hasNumber = /\d/.test(normalizedPiece)
+    const isStopToken = stopTokens.includes(normalizedPiece)
+    const isDosageInstruction = /^(?:[0-9]+(?:\.[0-9]+)?(?:\s*[a-z]+)?)$/i.test(normalizedPiece) && normalizedPiece.length <= 4
+
+    if (hasNumber || isStopToken || isDosageInstruction) {
+      break
+    }
+
+    cleanedPieces.push(piece)
+  }
+
+  const name = cleanedPieces.join(' ').trim()
+  return name.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '')
+}
+
+function isLikelyNonMedicineLine(line) {
+  const normalized = line.trim()
+  if (!normalized) {
+    return true
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    return true
+  }
+
+  const letters = normalized.match(/[A-Za-z]/g) || []
+  if (letters.length < 3) {
+    return true
+  }
+
+  const uppercaseRatio = (normalized.match(/[A-Z]/g) || []).length / Math.max(1, normalized.length)
+  if (uppercaseRatio > 0.5) {
+    return true
+  }
+
+  if (/\b(?:\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2})\b/.test(normalized)) {
+    return true
+  }
+
+  if (/\b(?:\d{3,4}\s*[- ]\s*\d{3,4})\b/.test(normalized)) {
+    return true
+  }
+
+  if (/\b(?:\d{3,5}\s+[A-Za-z]+(?:\s+[A-Za-z]+)*)\b/.test(normalized) && /\b(?:street|road|city|state|zip|postcode|address)\b/i.test(normalized)) {
+    return true
+  }
+
+  if (/\b(?:phone|mobile|email|website|dea|lic|license|patient|name|address|street|road|city|dob|gender|signature|sign|refill|prescription number|rx number)\b/i.test(normalized)) {
+    return true
+  }
+
+  return false
 }
 
 function parseMedicineLine(rawLine) {
@@ -105,19 +226,11 @@ function parseMedicineLine(rawLine) {
     return null
   }
 
-  if (shouldStopLine(line)) {
+  if (shouldStopLine(line) || isLikelyNonMedicineLine(line)) {
     return null
   }
 
-  const lowerLine = line.toLowerCase()
-  if (
-    /^(date|dated|doctor|dr|patient|name|address|phone|mobile|contact|clinic|hospital|license|age|refill|sig|signature|rx|℞|qty|quantity|days|morning|afternoon|evening|night|before|after|with|without|label|take)$/i.test(lowerLine) ||
-    /^(name|address|date|age|phone|license|sig|signature)\b/i.test(line)
-  ) {
-    return null
-  }
-
-  const frequencyMatch = line.match(/\b(BID|TID|QID|OD|BD|HS|AC|PC|PRN|STAT)\b/i)
+  const frequencyMatch = line.match(/\b(BID|TID|QID|OD|BD|SOS|HS|AC|PC|PRN|STAT)\b/i)
   const frequency = frequencyMatch ? frequencyMatch[1].toUpperCase() : ''
 
   const strengthMatch = line.match(/(\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|iu|u|gr))/i)
@@ -126,28 +239,7 @@ function parseMedicineLine(rawLine) {
   const dosageMatch = line.match(/(\d+(?:\s*-\s*\d+)?(?:\s*\/\s*\d+)?)\s*(tab|tabs|tablet|tablets|cap|caps|capsule|capsules|ml|tsp|drop|drops|spray|unit|units)/i)
   const dosage = dosageMatch ? `${dosageMatch[1].trim()} ${dosageMatch[2].toLowerCase()}` : ''
 
-  const hasMedicineSignal = /[A-Za-z]/.test(line) && (strength || dosage || frequency)
-  if (!hasMedicineSignal) {
-    return null
-  }
-
-  let name = line
-  if (strength) {
-    name = name.replace(strength, ' ')
-  }
-  if (dosage) {
-    name = name.replace(dosage, ' ')
-  }
-  if (frequency) {
-    name = name.replace(new RegExp(`\\b${frequency}\\b`, 'i'), ' ')
-  }
-
-  name = name
-    .replace(/[-–—:;,.]+/g, ' ')
-    .replace(/\b(?:take|takes|daily|twice|three|four|once|as|needed|for|with|without|per|every|at|s)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
+  const name = extractMedicineName(line)
   if (!name || name.length < 2 || name.length > 80) {
     return null
   }
@@ -158,7 +250,7 @@ function parseMedicineLine(rawLine) {
   }
 
   return {
-    name: name.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ''),
+    name,
     strength,
     dosage,
     frequency,
@@ -190,6 +282,127 @@ function extractProbableMedicines(text) {
   })
 
   return medicines
+}
+
+function normalizeTextForMatching(value) {
+  if (typeof value !== 'string') {
+    return ''
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/\b\d+(?:\.\d+)?\s*(?:mg|ml|g|mcg)\b/g, ' ')
+    .replace(/\b\d+\b/g, ' ')
+    .replace(/\b(?:bid|tid|qid|od|bd|sos|hs|prn|ac|pc|stat)\b/g, ' ')
+    .replace(/\b(?:tab|tabs|tablet|tablets|cap|caps|capsule|capsules|unit|units)\b/g, ' ')
+    .replace(/[+*:\-()\[\]{}|<>]/g, ' ')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function levenshteinDistance(a, b) {
+  const matrix = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0))
+
+  for (let i = 0; i <= a.length; i += 1) {
+    matrix[i][0] = i
+  }
+
+  for (let j = 0; j <= b.length; j += 1) {
+    matrix[0][j] = j
+  }
+
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost,
+      )
+    }
+  }
+
+  return matrix[a.length][b.length]
+}
+
+function calculateSimilarity(a, b) {
+  const normalizedA = normalizeTextForMatching(a)
+  const normalizedB = normalizeTextForMatching(b)
+
+  if (!normalizedA || !normalizedB) {
+    return 0
+  }
+
+  const distance = levenshteinDistance(normalizedA, normalizedB)
+  const maxLength = Math.max(normalizedA.length, normalizedB.length)
+  return maxLength === 0 ? 1 : 1 - distance / maxLength
+}
+
+const medicineSearchIndex = new Fuse(medicineDatabase, {
+  includeScore: true,
+  threshold: 0.45,
+  ignoreLocation: true,
+  minMatchCharLength: 3,
+  keys: ['name', 'genericName'],
+})
+
+function findBestMedicineMatch(ocrName) {
+  const cleanedName = normalizeTextForMatching(ocrName)
+  if (!cleanedName) {
+    return null
+  }
+
+  const fuseResults = medicineSearchIndex.search(cleanedName)
+  const bestFuseResult = fuseResults[0]
+
+  if (bestFuseResult && typeof bestFuseResult.score === 'number' && bestFuseResult.score < 0.45) {
+    return bestFuseResult.item
+  }
+
+  const candidates = medicineDatabase.flatMap((entry) => [entry.name, entry.genericName])
+  let bestCandidate = null
+  let bestSimilarity = 0
+
+  candidates.forEach((candidate) => {
+    const similarity = calculateSimilarity(cleanedName, candidate)
+    if (similarity > bestSimilarity) {
+      bestSimilarity = similarity
+      bestCandidate = candidate
+    }
+  })
+
+  if (bestSimilarity >= 0.72) {
+    return medicineDatabase.find((entry) => entry.name === bestCandidate || entry.genericName === bestCandidate) || null
+  }
+
+  return null
+}
+
+function enrichMedicinesWithDatabase(medicines) {
+  return medicines
+    .map((medicine) => {
+      const match = findBestMedicineMatch(medicine.name)
+
+      if (!match) {
+        return null
+      }
+
+      return {
+        ...medicine,
+        matched: true,
+        displayName: match.name,
+        correctedName: match.name,
+        ocrName: medicine.name,
+        name: match.name,
+        genericName: match.genericName,
+        category: match.category,
+        purpose: match.purpose,
+        commonSideEffects: match.commonSideEffects,
+        precautions: match.precautions,
+      }
+    })
+    .filter(Boolean)
 }
 
 function PrescriptionScanner() {
@@ -295,10 +508,12 @@ function PrescriptionScanner() {
       const processedImage = await prepareImageForOcr(selectedImage)
       const result = await worker.recognize(processedImage)
       const extractedText = result.data.text || 'No text detected in the uploaded image.'
+      const normalizedText = normalizeOcrText(extractedText)
       const confidence = typeof result.data.confidence === 'number' ? result.data.confidence * 100 : 100
-      setOcrText(extractedText)
+      const parsedMedicines = extractProbableMedicines(normalizedText)
+      setOcrText(normalizedText)
       setOcrConfidence(confidence)
-      setMedicines(extractProbableMedicines(extractedText))
+      setMedicines(enrichMedicinesWithDatabase(parsedMedicines))
     } catch (ocrError) {
       console.error('Prescription OCR failed:', ocrError)
       setError('We could not read the document clearly. Please try a sharper image, a different file, or a clearer scan.')
@@ -416,11 +631,26 @@ function PrescriptionScanner() {
                       </div>
                     ) : null}
                     {medicines.map((medicine) => (
-                      <div key={`${medicine.name}-${medicine.strength}-${medicine.dosage}-${medicine.frequency}`} className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm">
+                      <div key={`${medicine.ocrName}-${medicine.displayName}-${medicine.strength}-${medicine.dosage}-${medicine.frequency}`} className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold text-white">{medicine.name}</p>
+                          <div>
+                            <p className="font-semibold text-white">Medicine: {medicine.displayName}</p>
+                            <p className="mt-1 text-xs text-cyan-100/80">Recognized from OCR: {medicine.ocrName}</p>
+                          </div>
                           {medicine.frequency ? <span className="rounded-full bg-cyan-900/50 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100">{medicine.frequency}</span> : null}
                         </div>
+                        {medicine.matched ? (
+                          <>
+                            <div className="mt-3 space-y-2 text-cyan-50">
+                              {medicine.category ? <p><span className="font-semibold text-white">Category:</span> {medicine.category}</p> : null}
+                              {medicine.purpose ? <p><span className="font-semibold text-white">Purpose:</span> {medicine.purpose}</p> : null}
+                              {medicine.commonSideEffects ? <p><span className="font-semibold text-white">Side Effects:</span> {medicine.commonSideEffects}</p> : null}
+                              {medicine.precautions ? <p><span className="font-semibold text-white">Precautions:</span> {medicine.precautions}</p> : null}
+                            </div>
+                          </>
+                        ) : (
+                          <p className="mt-3 text-sm text-amber-100">{medicine.message}</p>
+                        )}
                         <div className="mt-3 flex flex-wrap gap-2">
                           {medicine.strength ? <span className="rounded-full bg-slate-900/30 px-2.5 py-1 text-xs font-semibold text-cyan-50">{medicine.strength}</span> : null}
                           {medicine.dosage ? <span className="rounded-full bg-slate-900/30 px-2.5 py-1 text-xs font-semibold text-cyan-50">{medicine.dosage}</span> : null}
