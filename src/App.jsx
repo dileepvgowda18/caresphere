@@ -1,6 +1,7 @@
 import { NavLink, Routes, Route } from 'react-router-dom'
 import Home from './pages/Home'
 import HospitalLocator from './pages/HospitalLocator'
+import PrescriptionScanner from './pages/PrescriptionScanner'
 import About from './pages/About'
 import Contact from './pages/Contact'
 
@@ -19,6 +20,9 @@ function App() {
             <NavLink to="/hospital-locator" className={({ isActive }) => (isActive ? 'text-cyan-700' : 'hover:text-cyan-700')}>
               Hospital Locator
             </NavLink>
+            <NavLink to="/prescription-scanner" className={({ isActive }) => (isActive ? 'text-cyan-700' : 'hover:text-cyan-700')}>
+              Prescription Scanner
+            </NavLink>
             <NavLink to="/about" className={({ isActive }) => (isActive ? 'text-cyan-700' : 'hover:text-cyan-700')}>
               About
             </NavLink>
@@ -33,6 +37,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/hospital-locator" element={<HospitalLocator />} />
+          <Route path="/prescription-scanner" element={<PrescriptionScanner />} />
           <Route path="/about" element={<About />} />
           <Route path="/contact" element={<Contact />} />
         </Routes>
