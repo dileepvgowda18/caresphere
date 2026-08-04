@@ -1,7 +1,9 @@
 import { NavLink, Routes, Route } from 'react-router-dom'
 import Home from './pages/Home'
+import Dashboard from './pages/Dashboard'
 import HospitalLocator from './pages/HospitalLocator'
 import PrescriptionScanner from './pages/PrescriptionScanner'
+import MedicalReportAnalyzer from './pages/MedicalReportAnalyzer'
 import About from './pages/About'
 import Contact from './pages/Contact'
 
@@ -14,6 +16,9 @@ function App() {
             CareSphere
           </NavLink>
           <nav className="flex gap-4 text-sm font-medium text-slate-600">
+            <NavLink to="/dashboard" className={({ isActive }) => (isActive ? 'text-cyan-700' : 'hover:text-cyan-700')}>
+              Dashboard
+            </NavLink>
             <NavLink to="/" className={({ isActive }) => (isActive ? 'text-cyan-700' : 'hover:text-cyan-700')}>
               Home
             </NavLink>
@@ -22,6 +27,9 @@ function App() {
             </NavLink>
             <NavLink to="/prescription-scanner" className={({ isActive }) => (isActive ? 'text-cyan-700' : 'hover:text-cyan-700')}>
               Prescription Scanner
+            </NavLink>
+            <NavLink to="/medical-report-analyzer" className={({ isActive }) => (isActive ? 'text-cyan-700' : 'hover:text-cyan-700')}>
+              Medical Report Analyzer
             </NavLink>
             <NavLink to="/about" className={({ isActive }) => (isActive ? 'text-cyan-700' : 'hover:text-cyan-700')}>
               About
@@ -36,8 +44,10 @@ function App() {
       <main>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/hospital-locator" element={<HospitalLocator />} />
           <Route path="/prescription-scanner" element={<PrescriptionScanner />} />
+          <Route path="/medical-report-analyzer" element={<MedicalReportAnalyzer />} />
           <Route path="/about" element={<About />} />
           <Route path="/contact" element={<Contact />} />
         </Routes>
