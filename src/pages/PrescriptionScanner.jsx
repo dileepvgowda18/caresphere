@@ -4,12 +4,48 @@ import { createWorker } from 'tesseract.js'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { medicineDatabase } from '../data/medicineDatabase'
+import { checkDrugInteractions } from '../utils/checkDrugInteractions'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 const ALLOWED_FILE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf']
 const MAX_IMAGE_DIMENSION = 2000
+
+function getSeverityStyles(severity) {
+  const normalizedSeverity = (severity || '').toLowerCase()
+
+  switch (normalizedSeverity) {
+    case 'high':
+      return {
+        border: 'border-red-500',
+        background: 'bg-red-50',
+        text: 'text-red-700',
+        badge: 'bg-red-100 text-red-700'
+      }
+    case 'moderate':
+      return {
+        border: 'border-orange-500',
+        background: 'bg-orange-50',
+        text: 'text-orange-700',
+        badge: 'bg-orange-100 text-orange-700'
+      }
+    case 'low':
+      return {
+        border: 'border-green-500',
+        background: 'bg-green-50',
+        text: 'text-green-700',
+        badge: 'bg-green-100 text-green-700'
+      }
+    default:
+      return {
+        border: 'border-gray-300',
+        background: 'bg-gray-50',
+        text: 'text-gray-700',
+        badge: 'bg-gray-100 text-gray-700'
+      }
+  }
+}
 
 function loadImageFromFile(file) {
   return new Promise((resolve, reject) => {
@@ -414,6 +450,7 @@ function PrescriptionScanner() {
   const [ocrConfidence, setOcrConfidence] = useState(100)
   const [ocrText, setOcrText] = useState('')
   const [medicines, setMedicines] = useState([])
+  const [drugInteractions, setDrugInteractions] = useState([])
   const fileInputRef = useRef(null)
 
   const previewUrl = useMemo(() => {
@@ -450,6 +487,7 @@ function PrescriptionScanner() {
     setError('')
     setOcrText('')
     setMedicines([])
+    setDrugInteractions([])
     setOcrConfidence(100)
     setSelectedImage(file)
   }
@@ -472,6 +510,7 @@ function PrescriptionScanner() {
     setError('')
     setOcrText('')
     setMedicines([])
+    setDrugInteractions([])
     setOcrConfidence(100)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -487,6 +526,7 @@ function PrescriptionScanner() {
     setError('')
     setOcrText('')
     setMedicines([])
+    setDrugInteractions([])
     setOcrConfidence(100)
     setOcrProgress(0)
 
@@ -511,14 +551,22 @@ function PrescriptionScanner() {
       const normalizedText = normalizeOcrText(extractedText)
       const confidence = typeof result.data.confidence === 'number' ? result.data.confidence * 100 : 100
       const parsedMedicines = extractProbableMedicines(normalizedText)
+      const enrichedMedicines = enrichMedicinesWithDatabase(parsedMedicines)
+      const extractedMedicineNames = enrichedMedicines
+        .map((medicine) => medicine.displayName || medicine.name || medicine.ocrName)
+        .filter(Boolean)
+      const interactions = checkDrugInteractions(extractedMedicineNames)
+
       setOcrText(normalizedText)
       setOcrConfidence(confidence)
-      setMedicines(enrichMedicinesWithDatabase(parsedMedicines))
+      setMedicines(enrichedMedicines)
+      setDrugInteractions(interactions)
     } catch (ocrError) {
       console.error('Prescription OCR failed:', ocrError)
       setError('We could not read the document clearly. Please try a sharper image, a different file, or a clearer scan.')
       setOcrText('')
       setMedicines([])
+      setDrugInteractions([])
     } finally {
       if (worker) {
         await worker.terminate()
@@ -657,6 +705,73 @@ function PrescriptionScanner() {
                         </div>
                       </div>
                     ))}
+
+                    {drugInteractions.length > 0 ? (
+                      <div className="mt-4 rounded-2xl border border-slate-200 bg-white/95 p-4 text-slate-800 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-rose-100 text-rose-600">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a1 1 0 00.9 1.48h18.56a1 1 0 00.9-1.48L13.71 3.86a1 1 0 00-1.72 0z" />
+                            </svg>
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-slate-900">⚠️ Drug Interaction Warnings</h4>
+                            <p className="text-xs text-slate-500">Reviewed from the detected medicines.</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 space-y-3">
+                          {drugInteractions.map((interaction, index) => {
+                            const severityStyles = getSeverityStyles(interaction.severity)
+
+                            return (
+                              <div key={`${interaction.medicineA}-${interaction.medicineB}-${index}`} className={`rounded-2xl border border-slate-200 p-4 shadow-sm border-l-4 ${severityStyles.border} ${severityStyles.background} ${severityStyles.text}`}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <p className={`font-semibold ${severityStyles.text}`}>{interaction.medicineA} + {interaction.medicineB}</p>
+                                    <p className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${severityStyles.badge}`}>{interaction.severity}</p>
+                                  </div>
+                                  <div className={`flex h-9 w-9 items-center justify-center rounded-full ${severityStyles.background} ${severityStyles.text}`}>
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a1 1 0 00.9 1.48h18.56a1 1 0 00.9-1.48L13.71 3.86a1 1 0 00-1.72 0z" />
+                                    </svg>
+                                  </div>
+                                </div>
+
+                                <div className="mt-3 space-y-3">
+                                  <div className="rounded-xl bg-slate-50 p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Medicine A</p>
+                                    <p className="mt-1 text-sm text-slate-700">{interaction.medicineA}</p>
+                                  </div>
+                                  <div className="rounded-xl bg-slate-50 p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Medicine B</p>
+                                    <p className="mt-1 text-sm text-slate-700">{interaction.medicineB}</p>
+                                  </div>
+                                  <div className="rounded-xl bg-slate-50 p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Severity</p>
+                                    <p className="mt-1 text-sm font-semibold text-slate-800">{interaction.severity}</p>
+                                  </div>
+                                  <div className="rounded-xl bg-slate-50 p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Risk</p>
+                                    <p className="mt-1 text-sm text-slate-700">{interaction.risk}</p>
+                                  </div>
+                                  <div className="rounded-xl bg-slate-50 p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Recommendation</p>
+                                    <p className="mt-1 text-sm text-slate-700">{interaction.recommendation}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {drugInteractions.length === 0 && (ocrText || medicines.length > 0) ? (
+                      <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-700 shadow-sm">
+                        ✅ No known drug interactions found.
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm">
